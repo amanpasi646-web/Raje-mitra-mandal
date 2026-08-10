@@ -1,3 +1,5 @@
+import { db } from './firebase';
+import { collection, onSnapshot, addDoc, doc, updateDoc, deleteDoc } from 'firebase/firestore';
 import React, { useState, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 
