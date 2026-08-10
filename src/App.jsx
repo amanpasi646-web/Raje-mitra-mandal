@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { db } from './firebase';
-import { collection, onSnapshot, addDoc, updateDoc, doc, deleteDoc } from 'firebase/firestore';
+import { collection, onSnapshot, addDoc, updateDoc, doc, deleteDoc, setDoc } from 'firebase/firestore';
 import * as XLSX from 'xlsx';
 
 export default function App() {
@@ -11,6 +11,11 @@ export default function App() {
   const [users, setUsers] = useState([]);
   const [expenses, setExpenses] = useState([]);
   const [chandaList, setChandaList] = useState([]);
+  const [chatMessages, setChatMessages] = useState([]);
+  const [officialStatus, setOfficialStatus] = useState('');
+  
+  // Specific Target/Goal State (Admin Only Update)
+  const [targetGoal, setTargetGoal] = useState({ date: '12/08/2026', amount: '20000' });
 
   // Form States
   const [loginMobile, setLoginMobile] = useState('');
@@ -20,17 +25,22 @@ export default function App() {
   const [signupMobile, setSignupMobile] = useState('');
   const [signupPass, setSignupPass] = useState('');
 
-  // Expense Form
+  // Expense & Chanda Form
   const [description, setDescription] = useState('');
   const [amount, setAmount] = useState('');
   const [paidBy, setPaidBy] = useState('');
 
-  // Chanda Form
   const [donorName, setDonorName] = useState('');
   const [chandaAmount, setChandaAmount] = useState('');
   const [collectedBy, setCollectedBy] = useState('');
 
-  // Real-time Listener for Firebase
+  // Admin Inputs
+  const [newStatusText, setNewStatusText] = useState('');
+  const [inputTargetDate, setInputTargetDate] = useState('');
+  const [inputTargetAmount, setInputTargetAmount] = useState('');
+  const [chatInput, setChatInput] = useState('');
+
+  // Real-time Listeners
   useEffect(() => {
     const unsubUsers = onSnapshot(collection(db, 'users'), (snapshot) => {
       setUsers(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
@@ -41,7 +51,17 @@ export default function App() {
     const unsubChanda = onSnapshot(collection(db, 'chanda'), (snapshot) => {
       setChandaList(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
     });
-    return () => { unsubUsers(); unsubExpenses(); unsubChanda(); };
+    const unsubChat = onSnapshot(collection(db, 'messages'), (snapshot) => {
+      setChatMessages(snapshot.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+    const unsubAnnounce = onSnapshot(doc(db, 'settings', 'announcement'), (docSnap) => {
+      if (docSnap.exists()) setOfficialStatus(docSnap.data().text || '');
+    });
+    const unsubTarget = onSnapshot(doc(db, 'settings', 'targetGoal'), (docSnap) => {
+      if (docSnap.exists()) setTargetGoal(docSnap.data());
+    });
+
+    return () => { unsubUsers(); unsubExpenses(); unsubChanda(); unsubChat(); unsubAnnounce(); unsubTarget(); };
   }, []);
 
   // Handle Login
@@ -56,9 +76,9 @@ export default function App() {
     if (!foundUser) {
       alert('Invalid Mobile Number or Password!');
     } else if (foundUser.status === 'pending') {
-      alert('Your account registration is pending Admin approval.');
+      alert('Your account is pending Admin approval.');
     } else if (foundUser.status === 'rejected') {
-      alert('Your registration request was rejected.');
+      alert('Your request was rejected.');
     } else {
       setCurrentUser(foundUser);
       setActiveTab('dashboard');
@@ -78,28 +98,61 @@ export default function App() {
         status: 'pending',
         createdAt: new Date().toLocaleDateString()
       });
-      alert('Sign Up request submitted! Admin will approve your account soon.');
+      alert('Sign Up request submitted! Admin will approve your account.');
       setSignupName(''); setSignupMobile(''); setSignupPass('');
       setActiveTab('login');
     } catch (err) { alert('Error: ' + err.message); }
   };
 
-  // Admin Actions: Approve/Reject/Remove Member
+  // Admin Actions
   const handleUserStatus = async (userId, newStatus) => {
-    try {
-      await updateDoc(doc(db, 'users', userId), { status: newStatus });
-    } catch (err) { alert('Error updating status: ' + err.message); }
+    try { await updateDoc(doc(db, 'users', userId), { status: newStatus }); } catch (err) { alert('Error: ' + err.message); }
   };
 
   const handleRemoveUser = async (userId) => {
-    if (window.confirm('Are you sure you want to remove this member?')) {
-      try {
-        await deleteDoc(doc(db, 'users', userId));
-      } catch (err) { alert('Error deleting user: ' + err.message); }
+    if (window.confirm('Remove this member?')) {
+      try { await deleteDoc(doc(db, 'users', userId)); } catch (err) { alert('Error: ' + err.message); }
     }
   };
 
-  // Add Expense
+  const handleDeleteExpense = async (id) => {
+    if (window.confirm('Delete this expense entry?')) {
+      try { await deleteDoc(doc(db, 'expenses', id)); } catch (err) { alert('Error: ' + err.message); }
+    }
+  };
+
+  const handleDeleteChanda = async (id) => {
+    if (window.confirm('Delete this Vargani entry?')) {
+      try { await deleteDoc(doc(db, 'chanda', id)); } catch (err) { alert('Error: ' + err.message); }
+    }
+  };
+
+  // Update Official Status (Admin Only)
+  const handleUpdateStatus = async (e) => {
+    e.preventDefault();
+    if (!newStatusText) return;
+    try {
+      await setDoc(doc(db, 'settings', 'announcement'), { text: newStatusText });
+      alert('Official update published!');
+      setNewStatusText('');
+    } catch (err) { alert('Error: ' + err.message); }
+  };
+
+  // Update Specific Target Goal (Admin Only)
+  const handleUpdateTarget = async (e) => {
+    e.preventDefault();
+    if (!inputTargetDate || !inputTargetAmount) return alert('Fill Date and Amount');
+    try {
+      await setDoc(doc(db, 'settings', 'targetGoal'), {
+        date: inputTargetDate,
+        amount: inputTargetAmount
+      });
+      alert('Target Vargani updated successfully!');
+      setInputTargetDate(''); setInputTargetAmount('');
+    } catch (err) { alert('Error: ' + err.message); }
+  };
+
+  // Add Entries
   const handleAddExpense = async (e) => {
     e.preventDefault();
     if (!description || !amount || !paidBy) return alert('Fill all fields');
@@ -110,12 +163,11 @@ export default function App() {
         paidBy,
         date: new Date().toLocaleDateString()
       });
-      alert('Expense recorded successfully!');
+      alert('Expense recorded!');
       setDescription(''); setAmount(''); setPaidBy('');
     } catch (err) { alert('Error: ' + err.message); }
   };
 
-  // Add Chanda (Vargani)
   const handleAddChanda = async (e) => {
     e.preventDefault();
     if (!donorName || !chandaAmount || !collectedBy) return alert('Fill all fields');
@@ -126,12 +178,27 @@ export default function App() {
         collectedBy,
         date: new Date().toLocaleDateString()
       });
-      alert('Vargani (Chanda) recorded successfully!');
+      alert('Vargani recorded!');
       setDonorName(''); setChandaAmount(''); setCollectedBy('');
     } catch (err) { alert('Error: ' + err.message); }
   };
 
-  // Excel Downloads
+  // Chat
+  const handleSendMessage = async (e) => {
+    e.preventDefault();
+    if (!chatInput) return;
+    try {
+      await addDoc(collection(db, 'messages'), {
+        sender: currentUser.name,
+        role: currentUser.role,
+        text: chatInput,
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      });
+      setChatInput('');
+    } catch (err) { alert('Error: ' + err.message); }
+  };
+
+  // Excel Downloads (Admin Only)
   const exportExpensesToExcel = () => {
     const worksheet = XLSX.utils.json_to_sheet(expenses);
     const workbook = XLSX.utils.book_new();
@@ -158,7 +225,7 @@ export default function App() {
     <div style={{ fontFamily: 'Arial, sans-serif', backgroundColor: '#f4f6f8', minHeight: '100vh', padding: '15px' }}>
       <header style={{ backgroundColor: '#b45309', color: '#fff', padding: '15px', borderRadius: '8px', textAlign: 'center', marginBottom: '20px' }}>
         <h1 style={{ margin: 0, fontSize: '24px' }}>🚩 Raje Mitra Mandal Portal 🚩</h1>
-        <p style={{ margin: '5px 0 0 0', fontSize: '14px' }}>Live Expense & Vargani (Chanda) Tracker</p>
+        <p style={{ margin: '5px 0 0 0', fontSize: '14px' }}>Live Expense & Vargani (Chanda) Management</p>
       </header>
 
       {!currentUser ? (
@@ -171,8 +238,8 @@ export default function App() {
           {activeTab === 'login' ? (
             <form onSubmit={handleLogin}>
               <h3>Account Login</h3>
-              <input type="text" placeholder="Mobile Number (Admin: 'admin')" value={loginMobile} onChange={e => setLoginMobile(e.target.value)} style={{ width: '100%', padding: '10px', marginBottom: '10px', boxSizing: 'border-box' }} required />
-              <input type="password" placeholder="Password (Admin: 'admin123')" value={loginPass} onChange={e => setLoginPass(e.target.value)} style={{ width: '100%', padding: '10px', marginBottom: '15px', boxSizing: 'border-box' }} required />
+              <input type="text" placeholder="Mobile Number" value={loginMobile} onChange={e => setLoginMobile(e.target.value)} style={{ width: '100%', padding: '10px', marginBottom: '10px', boxSizing: 'border-box' }} required />
+              <input type="password" placeholder="Password" value={loginPass} onChange={e => setLoginPass(e.target.value)} style={{ width: '100%', padding: '10px', marginBottom: '15px', boxSizing: 'border-box' }} required />
               <button type="submit" style={{ width: '100%', padding: '10px', background: '#b45309', color: '#fff', border: 'none', borderRadius: '4px', cursor: 'pointer' }}>Login</button>
             </form>
           ) : (
@@ -187,11 +254,47 @@ export default function App() {
         </div>
       ) : (
         <div style={{ maxWidth: '900px', margin: '0 auto' }}>
-          {/* Top Bar */}
+          {/* Top User Bar */}
           <div style={{ background: '#fff', padding: '15px', borderRadius: '8px', marginBottom: '20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div><strong>User: {currentUser.name}</strong> ({currentUser.role.toUpperCase()})</div>
             <button onClick={() => setCurrentUser(null)} style={{ background: '#ef4444', color: '#fff', border: 'none', padding: '8px 12px', borderRadius: '4px', cursor: 'pointer' }}>Logout</button>
           </div>
+
+          {/* Specific Target Vargani Display (Visible to Everyone) */}
+          <div style={{ background: '#f0fdf4', border: '2px solid #22c55e', padding: '15px', borderRadius: '8px', marginBottom: '20px', textAlign: 'center' }}>
+            <small style={{ color: '#15803d', fontWeight: 'bold', fontSize: '13px' }}>🎯 TARGET VARGANI (CHANDA)</small>
+            <h2 style={{ margin: '5px 0 0 0', color: '#166534', fontSize: '26px' }}>
+              Total Vargani ({targetGoal.date}): ₹{Number(targetGoal.amount).toLocaleString('en-IN')}
+            </h2>
+          </div>
+
+          {/* Official Announcement Board */}
+          {officialStatus && (
+            <div style={{ background: '#eff6ff', padding: '15px', borderRadius: '8px', border: '1px solid #93c5fd', marginBottom: '20px' }}>
+              <small style={{ color: '#1e40af', fontWeight: 'bold' }}>📢 OFFICIAL ANNOUNCEMENT:</small>
+              <h3 style={{ margin: '5px 0 0 0', color: '#1e3a8a' }}>{officialStatus}</h3>
+            </div>
+          )}
+
+          {/* Admin Control Section */}
+          {currentUser.role === 'admin' && (
+            <div style={{ background: '#fff', padding: '15px', borderRadius: '8px', marginBottom: '20px', border: '1px solid #cbd5e1' }}>
+              <h3>👑 Admin Panel: Updates & Target Setter</h3>
+              
+              {/* Set Target Vargani */}
+              <form onSubmit={handleUpdateTarget} style={{ display: 'flex', gap: '10px', marginBottom: '15px', flexWrap: 'wrap' }}>
+                <input type="text" placeholder="Target Date (e.g. 12/08/2026)" value={inputTargetDate} onChange={e => setInputTargetDate(e.target.value)} style={{ padding: '8px', flex: 1 }} required />
+                <input type="number" placeholder="Target Amount in ₹ (e.g. 20000)" value={inputTargetAmount} onChange={e => setInputTargetAmount(e.target.value)} style={{ padding: '8px', flex: 1 }} required />
+                <button type="submit" style={{ background: '#16a34a', color: '#fff', border: 'none', padding: '8px 15px', borderRadius: '4px', cursor: 'pointer' }}>Update Target Banner</button>
+              </form>
+
+              {/* Set Announcement */}
+              <form onSubmit={handleUpdateStatus} style={{ display: 'flex', gap: '10px' }}>
+                <input type="text" placeholder="Announcement text..." value={newStatusText} onChange={e => setNewStatusText(e.target.value)} style={{ flex: 1, padding: '8px' }} required />
+                <button type="submit" style={{ background: '#2563eb', color: '#fff', border: 'none', padding: '8px 15px', borderRadius: '4px', cursor: 'pointer' }}>Publish Update</button>
+              </form>
+            </div>
+          )}
 
           {/* Realtime Summary Cards */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '15px', marginBottom: '20px' }}>
@@ -209,10 +312,10 @@ export default function App() {
             </div>
           </div>
 
-          {/* Admin Member Management Panel */}
+          {/* Admin Member Management Table */}
           {currentUser.role === 'admin' && (
             <div style={{ background: '#fff', padding: '15px', borderRadius: '8px', marginBottom: '20px' }}>
-              <h3>👑 Admin Panel: Member Management & Approvals</h3>
+              <h3>👑 Admin Panel: Member Management</h3>
               <div style={{ overflowX: 'auto' }}>
                 <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '10px' }}>
                   <thead>
@@ -248,24 +351,22 @@ export default function App() {
             </div>
           )}
 
-          {/* Forms Section: Add Chanda & Add Expense */}
+          {/* Forms Section */}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '20px', marginBottom: '20px' }}>
-            {/* Add Chanda */}
             <div style={{ background: '#fff', padding: '15px', borderRadius: '8px' }}>
               <h3>🧾 Record Vargani (Chanda)</h3>
               <form onSubmit={handleAddChanda} style={{ display: 'grid', gap: '10px' }}>
-                <input type="text" placeholder="Donor Name (Kisne Chanda Diya)" value={donorName} onChange={e => setDonorName(e.target.value)} required style={{ padding: '8px' }} />
+                <input type="text" placeholder="Donor Name" value={donorName} onChange={e => setDonorName(e.target.value)} required style={{ padding: '8px' }} />
                 <input type="number" placeholder="Amount (₹)" value={chandaAmount} onChange={e => setChandaAmount(e.target.value)} required style={{ padding: '8px' }} />
-                <input type="text" placeholder="Collected By (Kiske Paas Jama Hua)" value={collectedBy} onChange={e => setCollectedBy(e.target.value)} required style={{ padding: '8px' }} />
+                <input type="text" placeholder="Collected By" value={collectedBy} onChange={e => setCollectedBy(e.target.value)} required style={{ padding: '8px' }} />
                 <button type="submit" style={{ background: '#16a34a', color: '#fff', border: 'none', padding: '10px', borderRadius: '4px', cursor: 'pointer' }}>Add Chanda</button>
               </form>
             </div>
 
-            {/* Add Expense */}
             <div style={{ background: '#fff', padding: '15px', borderRadius: '8px' }}>
               <h3>💸 Record Expense (Kharcha)</h3>
               <form onSubmit={handleAddExpense} style={{ display: 'grid', gap: '10px' }}>
-                <input type="text" placeholder="Description (e.g. Tea / Stage Decor)" value={description} onChange={e => setDescription(e.target.value)} required style={{ padding: '8px' }} />
+                <input type="text" placeholder="Description" value={description} onChange={e => setDescription(e.target.value)} required style={{ padding: '8px' }} />
                 <input type="number" placeholder="Amount (₹)" value={amount} onChange={e => setAmount(e.target.value)} required style={{ padding: '8px' }} />
                 <input type="text" placeholder="Paid By Name" value={paidBy} onChange={e => setPaidBy(e.target.value)} required style={{ padding: '8px' }} />
                 <button type="submit" style={{ background: '#b45309', color: '#fff', border: 'none', padding: '10px', borderRadius: '4px', cursor: 'pointer' }}>Add Expense</button>
@@ -273,20 +374,25 @@ export default function App() {
             </div>
           </div>
 
-          {/* Reports & Lists */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '20px' }}>
+          {/* Data Lists Section */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '20px', marginBottom: '20px' }}>
             {/* Chanda List */}
             <div style={{ background: '#fff', padding: '15px', borderRadius: '8px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                 <h3>Vargani (Chanda) List</h3>
-                <button onClick={exportChandaToExcel} style={{ background: '#16a34a', color: '#fff', border: 'none', padding: '6px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}>📊 Download Chanda Report</button>
+                {currentUser.role === 'admin' && (
+                  <button onClick={exportChandaToExcel} style={{ background: '#16a34a', color: '#fff', border: 'none', padding: '6px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}>📊 Download Report</button>
+                )}
               </div>
               {chandaList.map(c => (
-                <div key={c.id} style={{ padding: '8px', borderBottom: '1px solid #eee', display: 'flex', justifyContent: 'space-between' }}>
+                <div key={c.id} style={{ padding: '8px', borderBottom: '1px solid #eee', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div>
                     <strong>{c.donorName}</strong> - ₹{c.amount}
-                    <br /><small style={{ color: '#666' }}>Collected by: {c.collectedBy} | Date: {c.date}</small>
+                    <br /><small style={{ color: '#666' }}>Collected: {c.collectedBy} | Date: {c.date}</small>
                   </div>
+                  {currentUser.role === 'admin' && (
+                    <button onClick={() => handleDeleteChanda(c.id)} style={{ background: '#dc2626', color: '#fff', border: 'none', padding: '4px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px' }}>Delete</button>
+                  )}
                 </div>
               ))}
             </div>
@@ -295,17 +401,39 @@ export default function App() {
             <div style={{ background: '#fff', padding: '15px', borderRadius: '8px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '10px' }}>
                 <h3>Expenses List</h3>
-                <button onClick={exportExpensesToExcel} style={{ background: '#b45309', color: '#fff', border: 'none', padding: '6px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}>📊 Download Expense Report</button>
+                {currentUser.role === 'admin' && (
+                  <button onClick={exportExpensesToExcel} style={{ background: '#b45309', color: '#fff', border: 'none', padding: '6px 10px', borderRadius: '4px', cursor: 'pointer', fontSize: '12px' }}>📊 Download Report</button>
+                )}
               </div>
               {expenses.map(exp => (
-                <div key={exp.id} style={{ padding: '8px', borderBottom: '1px solid #eee', display: 'flex', justifyContent: 'space-between' }}>
+                <div key={exp.id} style={{ padding: '8px', borderBottom: '1px solid #eee', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                   <div>
                     <strong>{exp.description}</strong> - ₹{exp.amount}
                     <br /><small style={{ color: '#666' }}>Paid by: {exp.paidBy} | Date: {exp.date}</small>
                   </div>
+                  {currentUser.role === 'admin' && (
+                    <button onClick={() => handleDeleteExpense(exp.id)} style={{ background: '#dc2626', color: '#fff', border: 'none', padding: '4px 8px', borderRadius: '4px', cursor: 'pointer', fontSize: '11px' }}>Delete</button>
+                  )}
                 </div>
               ))}
             </div>
+          </div>
+
+          {/* Live Chat Room */}
+          <div style={{ background: '#fff', padding: '15px', borderRadius: '8px' }}>
+            <h3>💬 Mandal Live Chat Room</h3>
+            <div style={{ height: '200px', overflowY: 'auto', border: '1px solid #eee', padding: '10px', borderRadius: '4px', marginBottom: '10px', background: '#fafafa' }}>
+              {chatMessages.map(msg => (
+                <div key={msg.id} style={{ marginBottom: '8px' }}>
+                  <small style={{ color: msg.role === 'admin' ? '#b45309' : '#2563eb', fontWeight: 'bold' }}>{msg.sender} ({msg.time}):</small>
+                  <div style={{ background: '#fff', padding: '6px 10px', borderRadius: '4px', display: 'inline-block', marginLeft: '5px', border: '1px solid #eee' }}>{msg.text}</div>
+                </div>
+              ))}
+            </div>
+            <form onSubmit={handleSendMessage} style={{ display: 'flex', gap: '10px' }}>
+              <input type="text" placeholder="Type message..." value={chatInput} onChange={e => setChatInput(e.target.value)} style={{ flex: 1, padding: '8px' }} required />
+              <button type="submit" style={{ background: '#b45309', color: '#fff', border: 'none', padding: '8px 15px', borderRadius: '4px', cursor: 'pointer' }}>Send</button>
+            </form>
           </div>
         </div>
       )}
